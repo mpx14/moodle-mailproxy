@@ -169,6 +169,34 @@ This matters when the users are pupils and parents.
 - The archive stores complete messages (headers, bodies, attachments) for
   up to 14 days or 500 MB, readable by root and the service group.
 
+## How Moodle handles a failed send
+
+Read in the Moodle 4.5.13 source, not observed: the reference deployment
+has no failed send in its logs so far.
+
+- Moodle does not distinguish `451` from `550`. PHPMailer runs without
+  exceptions and reports any SMTP error as a failed send; `email_to_user()`
+  then logs a `\core\event\email_failed` event and returns false.
+- Whether the message is retried depends on the caller, not on the reply:
+  - Forum post notifications and digests run as adhoc tasks and are
+    retried: 12 attempts, the delay starting at one minute and doubling up
+    to 24 hours, about 34 hours in total. Only the failed posts of a
+    notification task are re-queued.
+  - Emails for group-conversation messages stay queued until the next run
+    of the daily email task.
+  - A caller that sends outside such a task and only checks the return
+    value gets no retry: the message is lost. These callers have not been
+    enumerated.
+- Each retry of a forum notification calls `message_send()` again, which
+  should also create another in-app notification for the recipient.
+- `email_to_user()` addresses exactly one recipient per message. The only
+  exception adds the support user when an attachment path is rejected as
+  unsafe.
+
+To check a Moodle site for failed sends, look for `email_failed` events in
+the standard log, and for `mod_forum` adhoc tasks with a non-zero
+`faildelay`.
+
 ## Known limitations of the current code
 
 Found by code review, not by incidents in production:
@@ -182,11 +210,14 @@ Found by code review, not by incidents in production:
    error.
 4. If one recipient group succeeds and another fails temporarily, the whole
    message gets `451`. If the client retries, the successful group receives
-   a duplicate.
-5. The code returns `451` on upstream authentication failure so that
-   Moodle can retry once the credentials are fixed. **It has not been
-   verified that Moodle retries a failed send at all.** Treat a `451` as a
-   message that may be lost.
+   a duplicate. With Moodle this needs two recipients in different routes,
+   which `email_to_user()` produces only in the unsafe-attachment case.
+5. A temporary failure is not a delayed delivery. The code answers `451`
+   (on upstream authentication failure, a refused sender, or a temporary
+   upstream error) so that a retrying client can resend later, but Moodle
+   retries only when the send runs inside a retrying task (forum mail,
+   group-conversation emails). Otherwise treat a failed send as lost. See
+   [How Moodle handles a failed send](#how-moodle-handles-a-failed-send).
 6. A partial recipient refusal by the relay fails the whole group, but the
    accepted recipients in that group have already been sent the message.
 7. An `.eml.tmp` left behind by a crash during an archive write is never
