@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-moodle-mailproxy — step 4c: routing + relay
+moodle-mailproxy — per-recipient SMTP routing: archive or relay
 
 Listens on 127.0.0.1:10025. For each incoming message:
   1. Parse the recipient list, group by destination upstream per the routing table.
@@ -22,8 +22,6 @@ import sys
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
-from email.parser import BytesParser
-from email.policy import default as default_policy
 from pathlib import Path
 
 import yaml

@@ -107,7 +107,6 @@ def main():
 
     # Pass 2: size (re-list, because pass 1 deleted files)
     files = list_eml_files()
-    total_before = sum(size for _, size, _ in files)
     size_count, size_freed = prune_by_size(files, MAX_TOTAL_BYTES)
 
     remove_empty_dirs()
