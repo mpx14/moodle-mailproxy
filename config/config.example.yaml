@@ -5,6 +5,10 @@
 #   chmod 0640 /etc/moodle-mailproxy/config.yaml
 # It contains relay credentials. Never commit the real file.
 #
+# Check it without starting the daemon:
+#   sudo -u moodle-mailproxy python3 /opt/moodle-mailproxy/proxy.py --check-config
+# Unknown keys and invalid values are rejected at startup.
+#
 # Routing is per recipient: a message with recipients in several domains
 # is split, and each group is handed to its matching upstream.
 # Apply changes with: systemctl restart moodle-mailproxy.service
@@ -14,6 +18,8 @@ listen:
   # reachable interface turns it into an open relay using your credentials.
   host: 127.0.0.1
   port: 10025
+  # A non-loopback host is rejected at startup unless this is set to true.
+  # allow_non_loopback: false
   # Name announced to the SMTP client (Moodle) in the banner.
   hostname: moodle.example.org
 
@@ -28,12 +34,12 @@ upstreams:
     type: smtp
     host: smtp.example.net
     port: 587
-    # "starttls" (default, usually port 587) or "tls" (implicit TLS,
-    # usually port 465). WARNING: in the current code, any other value,
-    # including a typo, connects WITHOUT encryption.
+    # "starttls" (default, usually port 587), "tls" (implicit TLS, usually
+    # port 465) or "none" (no encryption). Any other value is rejected.
     security: starttls
-    # "login" or "plain" turns authentication on. Both behave the same:
-    # the mechanism is negotiated with the server. Omit to disable.
+    # "login" or "plain" turns authentication on; both behave the same, as
+    # the mechanism is negotiated with the server. "none" (the default)
+    # turns it off. username and password are required unless it is "none".
     auth: login
     username: relay-user@example.org
     password: CHANGE-ME

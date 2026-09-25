@@ -7,12 +7,15 @@ Listens on 127.0.0.1:10025. For each incoming message:
   2. For each group, execute the action (archive to disk, or relay via SMTP).
   3. Return a single SMTP response reflecting the combined outcome.
 
-Config: /etc/moodle-mailproxy/config.yaml
+Config: /etc/moodle-mailproxy/config.yaml (override with --config PATH;
+        validate without starting with --check-config)
 Archive: /var/log/moodle-mailproxy/archive/YYYY/MM/DD/<ts>-<hash>.eml
 """
 
+import argparse
 import asyncio
 import hashlib
+import ipaddress
 import logging
 import os
 import signal
@@ -27,7 +30,7 @@ from pathlib import Path
 import yaml
 from aiosmtpd.controller import Controller
 
-CONFIG_PATH = Path("/etc/moodle-mailproxy/config.yaml")
+DEFAULT_CONFIG_PATH = Path("/etc/moodle-mailproxy/config.yaml")
 ARCHIVE_ROOT = Path("/var/log/moodle-mailproxy/archive")
 
 log = logging.getLogger("moodle-mailproxy")
@@ -37,28 +40,154 @@ log = logging.getLogger("moodle-mailproxy")
 # Config loading
 # ---------------------------------------------------------------------------
 
+class ConfigError(Exception):
+    """The configuration is invalid. Carries every problem found, not just the first."""
+
+    def __init__(self, problems: list):
+        self.problems = problems
+        super().__init__("; ".join(problems))
+
+
+TOP_KEYS = {"listen", "upstreams", "routes"}
+LISTEN_REQUIRED = {"host", "port", "hostname"}
+LISTEN_OPTIONAL = {"allow_non_loopback"}
+UPSTREAM_KEYS = {
+    "archive": ({"type"}, set()),
+    "smtp": ({"type", "host", "port"},
+             {"security", "auth", "username", "password", "timeout"}),
+}
+SECURITY_VALUES = ("starttls", "tls", "none")
+# "login" and "plain" are equivalent: either turns authentication on and
+# smtplib negotiates the mechanism with the server.
+AUTH_VALUES = ("none", "login", "plain")
+ROUTE_KEYS = {"domain", "upstream"}
+
+
+def _check_keys(where: str, d: dict, required: set, optional: set, problems: list):
+    for k in sorted(required - d.keys()):
+        problems.append(f"{where}: missing required key {k!r}")
+    for k in sorted(d.keys() - required - optional, key=str):
+        problems.append(f"{where}: unknown key {k!r}")
+
+
+def _is_port(v) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 65535
+
+
+def _is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False  # a hostname other than "localhost": cannot tell, treat as not loopback
+
+
+def validate(raw) -> list:
+    """Return a list of problems with a parsed config (empty list: valid)."""
+    problems = []
+    if not isinstance(raw, dict):
+        return ["config: top level must be a mapping"]
+    _check_keys("config", raw, TOP_KEYS, set(), problems)
+
+    listen = raw.get("listen")
+    if isinstance(listen, dict):
+        _check_keys("listen", listen, LISTEN_REQUIRED, LISTEN_OPTIONAL, problems)
+        if "port" in listen and not _is_port(listen["port"]):
+            problems.append("listen.port: must be an integer 1-65535")
+        for k in ("host", "hostname"):
+            if k in listen and not (isinstance(listen[k], str) and listen[k]):
+                problems.append(f"listen.{k}: must be a non-empty string")
+        allow = listen.get("allow_non_loopback", False)
+        if not isinstance(allow, bool):
+            problems.append("listen.allow_non_loopback: must be true or false")
+        elif isinstance(listen.get("host"), str) and not allow and not _is_loopback(listen["host"]):
+            problems.append(
+                f"listen.host: {listen['host']!r} is not a loopback address; the "
+                "listener has no authentication (set allow_non_loopback: true to override)")
+    elif "listen" in raw:
+        problems.append("listen: must be a mapping")
+
+    upstreams = raw.get("upstreams")
+    if isinstance(upstreams, dict) and upstreams:
+        for name, u in upstreams.items():
+            where = f"upstreams.{name}"
+            if not isinstance(u, dict):
+                problems.append(f"{where}: must be a mapping")
+                continue
+            t = u.get("type")
+            if t not in UPSTREAM_KEYS:
+                problems.append(f"{where}.type: must be one of {sorted(UPSTREAM_KEYS)}, got {t!r}")
+                continue
+            required, optional = UPSTREAM_KEYS[t]
+            _check_keys(where, u, required, optional, problems)
+            if t != "smtp":
+                continue
+            if "host" in u and not (isinstance(u["host"], str) and u["host"]):
+                problems.append(f"{where}.host: must be a non-empty string")
+            if "port" in u and not _is_port(u["port"]):
+                problems.append(f"{where}.port: must be an integer 1-65535")
+            if u.get("security", "starttls") not in SECURITY_VALUES:
+                problems.append(f"{where}.security: must be one of {list(SECURITY_VALUES)}, "
+                                f"got {u['security']!r}")
+            auth = u.get("auth", "none")
+            if auth not in AUTH_VALUES:
+                problems.append(f"{where}.auth: must be one of {list(AUTH_VALUES)}, got {auth!r}")
+            elif auth != "none":
+                for k in ("username", "password"):
+                    if not (isinstance(u.get(k), str) and u[k]):
+                        problems.append(f"{where}.{k}: required when auth is {auth!r}")
+            if "timeout" in u:
+                tv = u["timeout"]
+                if isinstance(tv, bool) or not isinstance(tv, (int, float)) or tv <= 0:
+                    problems.append(f"{where}.timeout: must be a positive number")
+    elif "upstreams" in raw:
+        problems.append("upstreams: must be a non-empty mapping")
+
+    routes = raw.get("routes")
+    if isinstance(routes, list) and routes:
+        seen = set()
+        for i, r in enumerate(routes):
+            where = f"routes[{i}]"
+            if not isinstance(r, dict):
+                problems.append(f"{where}: must be a mapping")
+                continue
+            _check_keys(where, r, ROUTE_KEYS, set(), problems)
+            d = r.get("domain")
+            if not (isinstance(d, str) and d):
+                problems.append(f"{where}.domain: must be a non-empty string")
+            else:
+                if d.lower() in seen:
+                    problems.append(f"{where}.domain: {d!r} duplicates an earlier route "
+                                    "(it could never match)")
+                seen.add(d.lower())
+            up = r.get("upstream")
+            if isinstance(upstreams, dict) and up not in upstreams:
+                problems.append(f"{where}.upstream: unknown upstream {up!r}")
+        catchalls = [i for i, r in enumerate(routes)
+                     if isinstance(r, dict) and r.get("domain") == "*"]
+        if len(catchalls) != 1 or catchalls[0] != len(routes) - 1:
+            problems.append("routes: must contain exactly one '*' catch-all entry, "
+                            "and it must be the last entry")
+    elif "routes" in raw:
+        problems.append("routes: must be a non-empty list")
+
+    return problems
+
+
 class Config:
     def __init__(self, raw: dict):
+        problems = validate(raw)
+        if problems:
+            raise ConfigError(problems)
         self.listen_host: str = raw["listen"]["host"]
-        self.listen_port: int = int(raw["listen"]["port"])
+        self.listen_port: int = raw["listen"]["port"]
         self.listen_hostname: str = raw["listen"]["hostname"]
         self.upstreams: dict = raw["upstreams"]
-        self.routes: list = raw["routes"]
-
-        # Validate every route's upstream exists.
-        for r in self.routes:
-            if r["upstream"] not in self.upstreams:
-                raise ValueError(
-                    f"route domain={r['domain']} references unknown upstream "
-                    f"{r['upstream']!r}"
-                )
-        # Validate exactly one catch-all and it's last.
-        catchalls = [i for i, r in enumerate(self.routes) if r["domain"] == "*"]
-        if len(catchalls) != 1 or catchalls[0] != len(self.routes) - 1:
-            raise ValueError(
-                "routes must contain exactly one '*' catch-all entry, "
-                "and it must be the last entry"
-            )
+        self.routes: list = [
+            {"domain": r["domain"].lower(), "upstream": r["upstream"]}
+            for r in raw["routes"]
+        ]
 
     def upstream_for(self, address: str) -> tuple[str, dict]:
         """
@@ -67,15 +196,15 @@ class Config:
         """
         domain = address.rsplit("@", 1)[-1].lower()
         for r in self.routes:
-            if r["domain"] == "*" or r["domain"].lower() == domain:
+            if r["domain"] == "*" or r["domain"] == domain:
                 name = r["upstream"]
                 return name, self.upstreams[name]
         # Unreachable given the catch-all validation above.
         raise RuntimeError(f"no route matched for {address!r}")
 
 
-def load_config() -> Config:
-    with open(CONFIG_PATH) as f:
+def load_config(path: Path) -> Config:
+    with open(path) as f:
         raw = yaml.safe_load(f)
     return Config(raw)
 
@@ -145,7 +274,7 @@ def action_smtp_relay(envelope, recipients: list, upstream_cfg: dict) -> Deliver
     """
     host = upstream_cfg["host"]
     port = int(upstream_cfg["port"])
-    security = upstream_cfg.get("security", "starttls")
+    security = upstream_cfg.get("security", "starttls")  # validated: starttls|tls|none
     auth = upstream_cfg.get("auth", "none")
     username = upstream_cfg.get("username")
     password = upstream_cfg.get("password")
@@ -292,7 +421,37 @@ class RoutingHandler:
 # Main
 # ---------------------------------------------------------------------------
 
-async def main():
+def parse_args(argv=None):
+    ap = argparse.ArgumentParser(description="Moodle outbound mail proxy")
+    ap.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH,
+                    help=f"config file (default: {DEFAULT_CONFIG_PATH})")
+    ap.add_argument("--check-config", action="store_true",
+                    help="validate the config and exit (0 = valid, 2 = invalid)")
+    return ap.parse_args(argv)
+
+
+# Exit status for an invalid or unreadable config. The unit sets
+# RestartPreventExitStatus=2 so systemd does not restart-loop on it.
+EXIT_CONFIG = 2
+
+
+def check_config(path: Path) -> int:
+    try:
+        config = load_config(path)
+    except ConfigError as e:
+        print(f"{path}: invalid config:", file=sys.stderr)
+        for p in e.problems:
+            print(f"  - {p}", file=sys.stderr)
+        return EXIT_CONFIG
+    except (OSError, yaml.YAMLError) as e:
+        print(f"{path}: cannot load config: {e}", file=sys.stderr)
+        return EXIT_CONFIG
+    print(f"{path}: config OK: upstreams={list(config.upstreams)} "
+          f"routes={[(r['domain'], r['upstream']) for r in config.routes]}")
+    return 0
+
+
+async def main(config_path: Path) -> int:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
@@ -300,8 +459,16 @@ async def main():
     )
     logging.getLogger("mail.log").setLevel(logging.WARNING)
 
-    config = load_config()
-    log.info("loaded config: upstreams=%s routes=%s",
+    try:
+        config = load_config(config_path)
+    except ConfigError as e:
+        for p in e.problems:
+            log.error("config %s: %s", config_path, p)
+        return EXIT_CONFIG
+    except (OSError, yaml.YAMLError) as e:
+        log.error("cannot load config %s: %s", config_path, e)
+        return EXIT_CONFIG
+    log.info("loaded config %s: upstreams=%s routes=%s", config_path,
              list(config.upstreams.keys()),
              [(r["domain"], r["upstream"]) for r in config.routes])
 
@@ -322,7 +489,11 @@ async def main():
 
     log.info("shutting down")
     controller.stop()
+    return 0
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    args = parse_args()
+    if args.check_config:
+        sys.exit(check_config(args.config))
+    sys.exit(asyncio.run(main(args.config)))

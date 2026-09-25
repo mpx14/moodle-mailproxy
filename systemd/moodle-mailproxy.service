@@ -12,6 +12,8 @@ UMask=0027
 ExecStart=/usr/bin/python3 /opt/moodle-mailproxy/proxy.py
 Restart=on-failure
 RestartSec=5s
+# proxy.py exits 2 on an invalid config: don't restart-loop on it.
+RestartPreventExitStatus=2
 
 # --- Sandboxing ---
 # Filesystem: read-only everything, with an explicit writable list.

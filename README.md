@@ -89,7 +89,7 @@ the service account there. The ownership above is the recommended one.
 ### Verify
 
 ```sh
-journalctl -u moodle-mailproxy -n 20      # expect "loaded config: ..." and "listening on 127.0.0.1:10025"
+journalctl -u moodle-mailproxy -n 20      # expect "loaded config /etc/moodle-mailproxy/config.yaml: ..." and "listening on 127.0.0.1:10025"
 ss -ltn | grep 10025                      # must show 127.0.0.1 only
 ```
 
@@ -136,10 +136,22 @@ blur the outcome of others. It is also the only value tested.
   example, a forum post to a forum with no subscribers is processed by
   Moodle and marked as mailed without sending anything. Check the Moodle
   side first in that case.
-- **Config changes:** `sudo systemctl restart moodle-mailproxy.service`.
-  The config is checked at startup (every route must name a defined
-  upstream; exactly one `*` route, placed last). If the check fails, the
-  service does not start, and the reason is in the journal.
+- **Config changes:** validate first, then restart:
+
+  ```sh
+  sudo -u moodle-mailproxy python3 /opt/moodle-mailproxy/proxy.py --check-config
+  sudo systemctl restart moodle-mailproxy.service
+  ```
+
+  `--check-config` prints every problem it finds and exits `2` if the config
+  is invalid, without touching the running service. The same checks run at
+  startup: unknown or missing keys, an unknown upstream `type`, `security`
+  or `auth` value, `auth` without `username`/`password`, non-integer ports,
+  a `listen.host` that is not loopback (unless `allow_non_loopback: true`),
+  routes naming an undefined upstream, duplicate route domains, and a
+  missing or misplaced `*` route. An invalid config makes the daemon exit
+  with status `2`, which the unit does not restart, and the reasons are in
+  the journal. `--config PATH` selects another config file.
 - **Archive retention:** `moodle-mailproxy-prune.timer` runs hourly and
   deletes archived messages older than 14 days, then the oldest ones until
   the archive is under 500 MB. Both limits are constants in `src/prune.py`.
@@ -201,28 +213,23 @@ the standard log, and for `mod_forum` adhoc tasks with a non-zero
 
 Found by code review, not by incidents in production:
 
-1. An unrecognised `security` value (e.g. the typo `ssl`) silently connects
-   **without encryption**.
-2. `auth: login` and `auth: plain` behave identically. Either value turns
-   authentication on, and the mechanism is negotiated with the server.
-3. An unknown upstream `type` is not rejected at startup. It fails when the
-   first message is routed there, and aiosmtpd answers with a permanent
-   error.
-4. If one recipient group succeeds and another fails temporarily, the whole
+1. If one recipient group succeeds and another fails temporarily, the whole
    message gets `451`. If the client retries, the successful group receives
    a duplicate. With Moodle this needs two recipients in different routes,
    which `email_to_user()` produces only in the unsafe-attachment case.
-5. A temporary failure is not a delayed delivery. The code answers `451`
+2. A temporary failure is not a delayed delivery. The code answers `451`
    (on upstream authentication failure, a refused sender, or a temporary
    upstream error) so that a retrying client can resend later, but Moodle
    retries only when the send runs inside a retrying task (forum mail,
    group-conversation emails). Otherwise treat a failed send as lost. See
    [How Moodle handles a failed send](#how-moodle-handles-a-failed-send).
-6. A partial recipient refusal by the relay fails the whole group, but the
+3. A partial recipient refusal by the relay fails the whole group, but the
    accepted recipients in that group have already been sent the message.
-7. An `.eml.tmp` left behind by a crash during an archive write is never
+4. An `.eml.tmp` left behind by a crash during an archive write is never
    pruned.
-8. The config path, archive path and retention limits are hardcoded.
+5. The archive path and the retention limits are hardcoded. The config
+   path defaults to `/etc/moodle-mailproxy/config.yaml` and can be changed
+   with `--config`.
 
 ## Licence
 
