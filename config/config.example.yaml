@@ -1,0 +1,56 @@
+# moodle-mailproxy configuration (EXAMPLE)
+#
+# Install as /etc/moodle-mailproxy/config.yaml with:
+#   chown root:moodle-mailproxy /etc/moodle-mailproxy/config.yaml
+#   chmod 0640 /etc/moodle-mailproxy/config.yaml
+# It contains relay credentials. Never commit the real file.
+#
+# Routing is per recipient: a message with recipients in several domains
+# is split, and each group is handed to its matching upstream.
+# Apply changes with: systemctl restart moodle-mailproxy.service
+
+listen:
+  # Loopback ONLY. The listener has no authentication; binding it to a
+  # reachable interface turns it into an open relay using your credentials.
+  host: 127.0.0.1
+  port: 10025
+  # Name announced to the SMTP client (Moodle) in the banner.
+  hostname: moodle.example.org
+
+upstreams:
+
+  # Writes the message to /var/log/moodle-mailproxy/archive/YYYY/MM/DD/
+  # instead of delivering it. The path is fixed in the daemon.
+  archive:
+    type: archive
+
+  relay:
+    type: smtp
+    host: smtp.example.net
+    port: 587
+    # "starttls" (default, usually port 587) or "tls" (implicit TLS,
+    # usually port 465). WARNING: in the current code, any other value,
+    # including a typo, connects WITHOUT encryption.
+    security: starttls
+    # "login" or "plain" turns authentication on. Both behave the same:
+    # the mechanism is negotiated with the server. Omit to disable.
+    auth: login
+    username: relay-user@example.org
+    password: CHANGE-ME
+    # Socket timeout in seconds for upstream SMTP operations. Default 30.
+    timeout: 30
+
+routes:
+  # Matched top to bottom; first match wins, per recipient.
+  # Exact, case-insensitive domain match. Subdomains are NOT matched
+  # implicitly. The only wildcard is "*".
+
+  # Example: synthetic addresses for users without a real mailbox
+  # (e.g. accounts imported without email) are kept on disk rather
+  # than sent to a domain that cannot receive them.
+  - domain: noemail.example.org
+    upstream: archive
+
+  # Catch-all: exactly one, and it must be the last entry (checked at startup).
+  - domain: "*"
+    upstream: relay
