@@ -7,6 +7,7 @@ After=moodle-mailproxy.service
 Type=oneshot
 User=moodle-mailproxy
 Group=moodle-mailproxy
+UMask=0027
 ExecStart=/usr/bin/python3 /opt/moodle-mailproxy/prune.py
 
 # Same sandboxing posture as the daemon, minus network (the pruner doesn't need any).

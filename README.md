@@ -155,8 +155,7 @@ blur the outcome of others. It is also the only value tested.
   capabilities, and a restricted syscall set. The pruner also has no
   network access. The daemon's network access is limited to IPv4/IPv6
   sockets, but not to particular destinations, because it must reach the
-  relay. The comment "only loopback" in the unit file is inaccurate: only
-  the listen address in the config keeps the listener local.
+  relay. Only the listen address in the config keeps the listener local.
 - Relay credentials are stored in plain text in the config file. They are
   protected by its `0640 root:moodle-mailproxy` permissions only.
 

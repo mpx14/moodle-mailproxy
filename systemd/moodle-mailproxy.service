@@ -8,6 +8,7 @@ Wants=network.target
 Type=simple
 User=moodle-mailproxy
 Group=moodle-mailproxy
+UMask=0027
 ExecStart=/usr/bin/python3 /opt/moodle-mailproxy/proxy.py
 Restart=on-failure
 RestartSec=5s
@@ -34,7 +35,9 @@ RestrictSUIDSGID=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
 
-# Network: only loopback, only IPv4/IPv6 sockets (no raw, no AF_PACKET, etc.).
+# Network: IPv4/IPv6 sockets only (no raw, no AF_PACKET, etc.). Destinations
+# are not restricted, because the daemon must reach the relay; only listen.host
+# in the config keeps the listener on loopback.
 RestrictAddressFamilies=AF_INET AF_INET6
 
 # Syscall filter: standard system service profile, deny @privileged.
