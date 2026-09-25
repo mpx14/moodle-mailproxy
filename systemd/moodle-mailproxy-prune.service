@@ -27,7 +27,9 @@ RestrictRealtime=true
 RestrictSUIDSGID=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
-RestrictAddressFamilies=
+# "none" blocks every socket family. An empty value resets the list,
+# which in a unit file means no restriction (checked on systemd 252).
+RestrictAddressFamilies=none
 IPAddressDeny=any
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
