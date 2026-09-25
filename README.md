@@ -188,8 +188,8 @@ Found by code review, not by incidents in production:
    Moodle can retry once the credentials are fixed. **It has not been
    verified that Moodle retries a failed send at all.** Treat a `451` as a
    message that may be lost.
-6. If the relay rejects every recipient, the failure is reported as
-   temporary (`451`) rather than permanent.
+6. A partial recipient refusal by the relay fails the whole group, but the
+   accepted recipients in that group have already been sent the message.
 7. An `.eml.tmp` left behind by a crash during an archive write is never
    pruned.
 8. The config path, archive path and retention limits are hardcoded.

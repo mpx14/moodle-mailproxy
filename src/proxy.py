@@ -129,6 +129,17 @@ def action_archive(envelope, recipients: list, _upstream_cfg: dict) -> DeliveryR
     return DeliveryResult(DeliveryResult.OK, f"archived to {path} for {recipients}")
 
 
+def _status_for_code(code: int) -> str:
+    return DeliveryResult.TEMP_FAIL if 400 <= code < 500 else DeliveryResult.PERM_FAIL
+
+
+def _status_for_refused(refused: dict) -> str:
+    """Any 4xx refusal makes the group temporary, otherwise permanent."""
+    codes = [code for code, _ in refused.values()]
+    return (DeliveryResult.TEMP_FAIL if any(400 <= c < 500 for c in codes)
+            else DeliveryResult.PERM_FAIL)
+
+
 def action_smtp_relay(envelope, recipients: list, upstream_cfg: dict) -> DeliveryResult:
     """
     Relay the message to an upstream SMTP server for the given recipient subset.
@@ -161,10 +172,8 @@ def action_smtp_relay(envelope, recipients: list, upstream_cfg: dict) -> Deliver
             refused = client.sendmail(envelope.mail_from, recipients, envelope.content)
 
         if refused:
-            # Some recipients rejected. Treat as permanent fail for this group;
-            # we won't retry rejections that the server explicitly refused.
             return DeliveryResult(
-                DeliveryResult.PERM_FAIL,
+                _status_for_refused(refused),
                 f"upstream refused recipients: {refused}",
             )
         return DeliveryResult(
@@ -179,18 +188,32 @@ def action_smtp_relay(envelope, recipients: list, upstream_cfg: dict) -> Deliver
         log.error("upstream auth failed for %s: %s", host, e)
         return DeliveryResult(DeliveryResult.TEMP_FAIL, f"upstream auth failed: {e}")
 
-    except (smtplib.SMTPServerDisconnected, smtplib.SMTPConnectError,
-            ConnectionError, TimeoutError, OSError) as e:
-        # Network / transient upstream issue.
-        log.warning("upstream connection issue for %s: %s", host, e)
-        return DeliveryResult(DeliveryResult.TEMP_FAIL, f"upstream connect error: {e}")
+    except smtplib.SMTPRecipientsRefused as e:
+        # Every recipient refused. Not a subclass of SMTPResponseException.
+        return DeliveryResult(_status_for_refused(e.recipients),
+                              f"upstream refused all recipients: {e.recipients}")
+
+    except smtplib.SMTPSenderRefused as e:
+        # MAIL FROM rejected: usually our sender is not authorised at the
+        # provider -- a config problem, treated like an auth failure.
+        log.error("upstream refused sender %s: %s %r", e.sender, e.smtp_code, e.smtp_error)
+        return DeliveryResult(DeliveryResult.TEMP_FAIL,
+                              f"upstream refused sender {e.smtp_code}: {e.smtp_error!r}")
+
+    except smtplib.SMTPConnectError as e:
+        log.warning("upstream refused connection %s: %s", host, e)
+        return DeliveryResult(DeliveryResult.TEMP_FAIL, f"upstream connect refused: {e}")
 
     except smtplib.SMTPResponseException as e:
-        # The server responded with an SMTP error code.
-        # 4xx -> temp, 5xx -> perm.
-        status = (DeliveryResult.TEMP_FAIL if 400 <= e.smtp_code < 500
-                  else DeliveryResult.PERM_FAIL)
-        return DeliveryResult(status, f"upstream {e.smtp_code}: {e.smtp_error!r}")
+        # Must come before OSError: smtplib.SMTPException subclasses OSError.
+        return DeliveryResult(_status_for_code(e.smtp_code),
+                              f"upstream {e.smtp_code}: {e.smtp_error!r}")
+
+    except OSError as e:
+        # Network, TLS and remaining smtplib errors (disconnect, STARTTLS
+        # or AUTH not offered).
+        log.warning("upstream connection issue for %s: %s", host, e)
+        return DeliveryResult(DeliveryResult.TEMP_FAIL, f"upstream connect error: {e}")
 
     except Exception as e:
         log.exception("unexpected upstream error")
