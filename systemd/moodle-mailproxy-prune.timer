@@ -1,0 +1,16 @@
+[Unit]
+Description=Hourly prune of moodle-mailproxy archive
+Documentation=file:///opt/moodle-mailproxy/prune.py
+
+[Timer]
+# Run 5 minutes after boot, then every hour on the hour.
+OnBootSec=5min
+OnCalendar=hourly
+# If we missed a run (machine off, etc.), run once on the next start.
+Persistent=true
+# Spread load if multiple timers fire on the hour.
+RandomizedDelaySec=2min
+Unit=moodle-mailproxy-prune.service
+
+[Install]
+WantedBy=timers.target

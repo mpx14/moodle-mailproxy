@@ -1,0 +1,36 @@
+[Unit]
+Description=Prune moodle-mailproxy archive (age + size caps)
+Documentation=file:///opt/moodle-mailproxy/prune.py
+After=moodle-mailproxy.service
+
+[Service]
+Type=oneshot
+User=moodle-mailproxy
+Group=moodle-mailproxy
+ExecStart=/usr/bin/python3 /opt/moodle-mailproxy/prune.py
+
+# Same sandboxing posture as the daemon, minus network (the pruner doesn't need any).
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/moodle-mailproxy
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+PrivateDevices=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=
+IPAddressDeny=any
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=

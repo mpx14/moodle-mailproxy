@@ -1,0 +1,50 @@
+[Unit]
+Description=Moodle outbound mail proxy (filter, archive, relay)
+Documentation=file:///opt/moodle-mailproxy/proxy.py
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=moodle-mailproxy
+Group=moodle-mailproxy
+ExecStart=/usr/bin/python3 /opt/moodle-mailproxy/proxy.py
+Restart=on-failure
+RestartSec=5s
+
+# --- Sandboxing ---
+# Filesystem: read-only everything, with an explicit writable list.
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/moodle-mailproxy
+PrivateTmp=true
+
+# Process: no new privileges, no kernel tunables, no kernel modules, no devices.
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+PrivateDevices=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+# Network: only loopback, only IPv4/IPv6 sockets (no raw, no AF_PACKET, etc.).
+RestrictAddressFamilies=AF_INET AF_INET6
+
+# Syscall filter: standard system service profile, deny @privileged.
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallArchitectures=native
+
+# Capabilities: drop everything. We bind to 10025 so we don't need NET_BIND_SERVICE.
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

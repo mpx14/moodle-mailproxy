@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+# Never commit a real config or archived mail
+config.yaml
+*.eml
+*.eml.tmp
