@@ -12,9 +12,12 @@ that cannot deliver it.
 
 ## Status
 
-- The tag `deployed-2026-04-15` is the code as found on the production host,
-  verified by SHA-256 on 2026-09-25 (hashes are in that commit's message).
-  Later commits are documentation unless their message says otherwise.
+- `deployed-*` tags mark the code running on the reference production
+  host, with the SHA-256 hashes of the installed files in the tag message
+  (for `deployed-2026-04-15`, in the tagged commit's message). The current
+  one is `deployed-2026-09-25`; `deployed-2026-04-15` is the original code
+  as found on the host. Commits after the latest `deployed-*` tag are not
+  deployed.
 - **Tested in production:** Debian 12, Python 3.11.2, python3-aiosmtpd 1.4.3,
   python3-yaml 6.0, Moodle 4.5, one `archive` upstream plus one `smtp`
   upstream using STARTTLS and LOGIN on port 587.
